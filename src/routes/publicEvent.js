@@ -10,6 +10,8 @@ function publicEvent(e) {
     name: e.name,
     tagline: e.tagline,
     org: e.org,
+    ageLimit: e.ageLimit,
+    locations: Array.isArray(e.locations) ? e.locations : [],
     description: e.description,
     venue: e.venue,
     dates: e.dates,

@@ -82,6 +82,11 @@ router.put('/:id', async (req, res) => {
     if (body.name !== undefined) update.name = String(body.name);
     if (body.tagline !== undefined) update.tagline = String(body.tagline);
     if (body.org !== undefined) update.org = String(body.org);
+    if (body.ageLimit !== undefined) update.ageLimit = String(body.ageLimit || '');
+    if (body.locations !== undefined)
+      update.locations = Array.isArray(body.locations)
+        ? body.locations.map((s) => String(s || '').trim()).filter(Boolean)
+        : [];
     if (body.description !== undefined) update.description = String(body.description);
     if (body.venue !== undefined) update.venue = String(body.venue);
     if (body.status !== undefined) {
@@ -191,6 +196,10 @@ function sanitizeBody(body) {
     name: String(body.name || 'Untitled event'),
     tagline: String(body.tagline || ''),
     org: String(body.org || ''),
+    ageLimit: String(body.ageLimit || ''),
+    locations: Array.isArray(body.locations)
+      ? body.locations.map((s) => String(s || '').trim()).filter(Boolean)
+      : [],
     description: String(body.description || ''),
     venue: String(body.venue || ''),
     dates: {
