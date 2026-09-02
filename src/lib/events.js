@@ -40,10 +40,53 @@ async function getEventByCode(code) {
   return serializeEvent(row);
 }
 
+// The single soonest active event. Kept for the legacy `/api/public/event`
+// endpoint — with several events live this returns the next one up rather than
+// whichever row Mongo happened to find first.
 async function getActiveEvent() {
+  const rows = await getActiveEvents();
+  return rows[0] || null;
+}
+
+// Every published event, soonest first. Events without a start date sort last,
+// newest-created among them.
+async function getActiveEvents() {
   const db = await getDb();
-  const row = await db.collection(EVENTS_COLLECTION).findOne({ status: 'active' });
-  return serializeEvent(row);
+  const rows = await db.collection(EVENTS_COLLECTION).find({ status: 'active' }).toArray();
+  return rows
+    .map(serializeEvent)
+    .sort((a, b) => {
+      const at = Date.parse(a.dates?.start || '') || Infinity;
+      const bt = Date.parse(b.dates?.start || '') || Infinity;
+      if (at !== bt) return at - bt;
+      return String(b.createdAt).localeCompare(String(a.createdAt));
+    });
+}
+
+// Is this public code free? `exceptId` lets an event keep its own code on edit.
+async function isCodeAvailable(code, exceptId) {
+  const clean = String(code || '').trim().toUpperCase();
+  if (!clean) return false;
+  const db = await getDb();
+  const row = await db.collection(EVENTS_COLLECTION).findOne({ code: clean });
+  if (!row) return true;
+  return exceptId ? String(row._id) === String(exceptId) : false;
+}
+
+// One-time unique index on `code`. Runs in the background and never throws —
+// if existing data has duplicate codes the index is simply not created, and the
+// application-level check in isCodeAvailable still guards new writes.
+let indexPromise = null;
+function ensureCodeIndex() {
+  if (!indexPromise) {
+    indexPromise = getDb()
+      .then((db) => db.collection(EVENTS_COLLECTION).createIndex({ code: 1 }, { unique: true }))
+      .catch((e) => {
+        console.warn('[events] unique index on code not created:', e.message);
+        return null;
+      });
+  }
+  return indexPromise;
 }
 
 async function createEvent(data) {
@@ -104,6 +147,9 @@ module.exports = {
   getEventBySlug,
   getEventByCode,
   getActiveEvent,
+  getActiveEvents,
+  isCodeAvailable,
+  ensureCodeIndex,
   createEvent,
   updateEvent,
   setEventStatus,

@@ -1,5 +1,6 @@
 const express = require('express');
 const { isAdminAuthorized } = require('../lib/auth');
+const { uploadToCloudinary, parseDataUri } = require('../lib/cloudinary');
 const {
   getEvents,
   getEventBySlug,
@@ -8,11 +9,36 @@ const {
   setEventStatus,
   createEvent,
   getRegistrationCountForEvent,
+  isCodeAvailable,
+  ensureCodeIndex,
 } = require('../lib/events');
 
 const router = express.Router();
 
+ensureCodeIndex();
+
 const EVENT_STATUSES = ['draft', 'active', 'closed', 'cancelled'];
+
+// The public code doubles as the event's URL (harekrishnavizag.org/YJ), so it
+// has to stay short, unambiguous and clear of the app's own routes.
+const CODE_RE = /^[A-Z0-9]{2,12}$/;
+const RESERVED_CODES = new Set([
+  'ADMIN', 'LOGIN', 'LOGOUT', 'API', 'EVENTS', 'EVENT', 'REGISTER',
+  'REGISTRATIONS', 'BOOK', 'BOOKING', 'REFUND', 'PUBLIC', 'STATIC',
+  'ASSETS', 'FAVICON', 'ROBOTS', 'SITEMAP', 'NEXT', 'WWW',
+]);
+
+function normalizeCode(raw) {
+  return String(raw || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+}
+
+// Returns an error message, or null when the code is usable.
+function codeProblem(code) {
+  if (!code) return 'A public code is required — this becomes the event URL.';
+  if (!CODE_RE.test(code)) return 'Use 2–12 letters and numbers only, e.g. YJ or RCY26.';
+  if (RESERVED_CODES.has(code)) return `"${code}" is reserved by the site. Pick another code.`;
+  return null;
+}
 const TICKET_KEYS = new Set(['general', 'student', 'vip', 'group', 'couple']);
 
 function requireAdmin(req, res) {
@@ -22,6 +48,31 @@ function requireAdmin(req, res) {
   }
   return true;
 }
+
+// POST /api/events/upload-image -> { url }
+// Takes a base64 data URI from the admin's file picker and puts it on
+// Cloudinary, so hero artwork is uploaded rather than pasted as a URL.
+// The 10mb express.json limit in index.js caps what can arrive here.
+router.post('/upload-image', async (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  const { data, type, slot } = req.body || {};
+  if (!data) return res.status(400).json({ error: 'No image was sent.' });
+
+  try {
+    const { mime, b64 } = parseDataUri(data, type);
+    if (!/^image\//.test(mime)) {
+      return res.status(400).json({ error: 'That file is not an image. Use a JPG, PNG or WebP.' });
+    }
+    const publicId = `${String(slot || 'hero').replace(/[^a-zA-Z0-9_-]/g, '')}-${Date.now()}`;
+    const url = await uploadToCloudinary(b64, mime, publicId, 'event-hero');
+    if (!url) {
+      return res.status(502).json({ error: 'Upload failed. Check the Cloudinary keys on the server.' });
+    }
+    res.json({ url });
+  } catch (e) {
+    res.status(502).json({ error: String(e) });
+  }
+});
 
 // GET /api/events?event_code=... -> list with registration counts
 router.get('/', async (req, res) => {
@@ -42,13 +93,43 @@ router.get('/', async (req, res) => {
 router.post('/', async (req, res) => {
   if (!requireAdmin(req, res)) return;
   const body = req.body || {};
-  if (!body.name) return res.status(400).json({ error: 'name is required' });
+  if (!body.name) return res.status(400).json({ error: 'An event name is required.' });
+
+  const code = normalizeCode(body.code);
+  const problem = codeProblem(code);
+  if (problem) return res.status(400).json({ error: problem, field: 'code' });
+
   try {
-    const data = sanitizeBody(body);
+    if (!(await isCodeAvailable(code))) {
+      return res.status(409).json({ error: `The code "${code}" is already used by another event.`, field: 'code' });
+    }
+    const data = sanitizeBody({ ...body, code });
     const event = await createEvent(data);
     res.status(201).json({ event });
   } catch (e) {
-    if (e && e.code === 11000) return res.status(409).json({ error: 'Event code already exists' });
+    if (e && e.code === 11000) {
+      return res.status(409).json({ error: `The code "${code}" is already used by another event.`, field: 'code' });
+    }
+    res.status(502).json({ error: String(e) });
+  }
+});
+
+// GET /api/events/check-code?code=YJ&except=<eventId> -> { available, error }
+// Powers the live availability hint under the code field in the admin form.
+// Declared before /:id so "check-code" isn't read as an event identifier.
+router.get('/check-code', async (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  const code = normalizeCode(req.query.code);
+  const problem = codeProblem(code);
+  if (problem) return res.json({ code, available: false, error: problem });
+  try {
+    const available = await isCodeAvailable(code, req.query.except || undefined);
+    res.json({
+      code,
+      available,
+      error: available ? null : `The code "${code}" is already used by another event.`,
+    });
+  } catch (e) {
     res.status(502).json({ error: String(e) });
   }
 });
@@ -77,7 +158,15 @@ router.put('/:id', async (req, res) => {
     if (!existing) return res.status(404).json({ error: 'Not found' });
 
     const update = {};
-    if (body.code !== undefined) update.code = String(body.code).trim().toUpperCase();
+    if (body.code !== undefined) {
+      const code = normalizeCode(body.code);
+      const problem = codeProblem(code);
+      if (problem) return res.status(400).json({ error: problem, field: 'code' });
+      if (code !== existing.code && !(await isCodeAvailable(code, existing._id))) {
+        return res.status(409).json({ error: `The code "${code}" is already used by another event.`, field: 'code' });
+      }
+      update.code = code;
+    }
     if (body.slug !== undefined) update.slug = toSlug(body.slug);
     if (body.name !== undefined) update.name = String(body.name);
     if (body.tagline !== undefined) update.tagline = String(body.tagline);

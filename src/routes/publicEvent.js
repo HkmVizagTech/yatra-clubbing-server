@@ -1,8 +1,9 @@
 const express = require('express');
-const { getActiveEvent } = require('../lib/events');
+const { getActiveEvent, getActiveEvents, getEventBySlug } = require('../lib/events');
 
 const router = express.Router();
 
+// Full shape used by an event's own landing page.
 function publicEvent(e) {
   return {
     code: e.code,
@@ -34,11 +35,62 @@ function publicEvent(e) {
       showCountdown: e.branding && e.branding.showCountdown,
       mantra: e.branding && e.branding.mantra,
     },
+    // The booking ref prefix belongs to the event, so refs read YJ-… not YC-….
+    receiptPrefix: (e.payments && e.payments.receiptPrefix) || 'YC-',
     status: e.status,
   };
 }
 
-// GET /api/public/event
+// Trimmed shape for the home page's chooser cards — enough to decide, no more.
+function eventCard(e) {
+  const tickets = Array.isArray(e.tickets) ? e.tickets : [];
+  const prices = tickets.map((t) => Number(t.price) || 0).filter((n) => n > 0);
+  return {
+    code: e.code,
+    name: e.name,
+    tagline: e.tagline,
+    org: e.org,
+    venue: e.venue,
+    ageLimit: e.ageLimit,
+    locations: Array.isArray(e.locations) ? e.locations : [],
+    dates: e.dates,
+    priceFrom: prices.length ? Math.min(...prices) : null,
+    ticketCount: tickets.length,
+    branding: {
+      heroDesktop: e.branding && e.branding.heroDesktop,
+      heroMobile: e.branding && e.branding.heroMobile,
+      themeColor: e.branding && e.branding.themeColor,
+    },
+    status: e.status,
+  };
+}
+
+// GET /api/public/events — every published event, soonest first.
+// This is what the home page lists so people can pick the yatra they want.
+router.get('/events', async (req, res) => {
+  try {
+    const events = await getActiveEvents();
+    res.json({ events: events.map(eventCard) });
+  } catch (e) {
+    res.status(502).json({ error: String(e) });
+  }
+});
+
+// GET /api/public/event/:code — one event by its public code (e.g. /YJ).
+// Non-active events are returned too, with their status, so the page can show
+// the right "cancelled" or "registrations closed" message instead of a 404.
+router.get('/event/:code', async (req, res) => {
+  try {
+    const event = await getEventBySlug(String(req.params.code || '').trim());
+    if (!event) return res.status(404).json({ event: null, error: 'Event not found' });
+    res.json({ event: publicEvent(event) });
+  } catch (e) {
+    res.status(502).json({ error: String(e) });
+  }
+});
+
+// GET /api/public/event — legacy single-event endpoint. Returns the soonest
+// active event. Kept so an older deployed frontend keeps working.
 router.get('/event', async (req, res) => {
   try {
     const event = await getActiveEvent();
