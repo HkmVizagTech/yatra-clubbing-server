@@ -11,11 +11,11 @@ const createOrderRouter = require('./routes/createOrder');
 const verifyPaymentRouter = require('./routes/verifyPayment');
 const verifyStudentRouter = require('./routes/verifyStudent');
 const whatsappRouter = require('./routes/whatsapp');
-const webhookRazorpayRouter = require('./routes/webhookRazorpay');
-const adminSessionRouter = require('./routes/admin/session');
+const webhookRazorpayRouter = require('./routes/webhookRazorpay');const adminSessionRouter = require('./routes/admin/session');
 const adminRefundAllRouter = require('./routes/admin/refundAll');
 const adminRefundAuditRouter = require('./routes/admin/refundAudit');
 const adminRefundManualRouter = require('./routes/admin/refundManual');
+const { publicRouter: collegesPublicRouter, adminRouter: collegesAdminRouter } = require('./routes/colleges');
 
 const app = express();
 app.disable('x-powered-by');
@@ -76,12 +76,14 @@ app.use('/api/create-order', createOrderRouter);
 app.use('/api/verify-payment', verifyPaymentRouter);
 app.use('/api/verify-student', verifyStudentRouter);
 app.use('/api/whatsapp', whatsappRouter);
+app.use('/api/colleges', collegesPublicRouter);
 
 // Admin routes
 app.use('/api/admin', adminSessionRouter);
 app.use('/api/admin', adminRefundAllRouter);
 app.use('/api/admin', adminRefundAuditRouter);
 app.use('/api/admin', adminRefundManualRouter);
+app.use('/api/admin/colleges', collegesAdminRouter);
 
 // Fallback: unknown API route
 app.use('/api', (req, res) => res.status(404).json({ error: 'Not found' }));
