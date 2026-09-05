@@ -15,6 +15,10 @@ function publicEvent(e) {
     locations: Array.isArray(e.locations) ? e.locations : [],
     description: e.description,
     venue: e.venue,
+    timing: e.timing || '',
+    transport: e.transport || '',
+    highlights: Array.isArray(e.highlights) ? e.highlights : [],
+    benefits: Array.isArray(e.benefits) ? e.benefits : [],
     dates: e.dates,
     timeline: e.timeline,
     tickets: (e.tickets || []).map((t) => ({

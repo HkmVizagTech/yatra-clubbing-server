@@ -21,12 +21,31 @@ const app = express();
 app.disable('x-powered-by');
 
 // CORS — allow the configured frontend origin(s) with credentials (admin cookie).
-const allowedOrigins = config.frontendUrls.length ? config.frontendUrls : ['http://localhost:3000'];
+//
+// FRONTEND_URL is a comma-separated allowlist. Origins are compared after
+// normalising case and any trailing slash, because "https://Example.org/" and
+// "https://example.org" are the same origin but not the same string — that
+// mismatch is the usual cause of a working local build and a CORS-blocked
+// production one.
+function normalizeOrigin(value) {
+  return String(value || '').trim().replace(/\/+$/, '').toLowerCase();
+}
+
+const allowedOrigins = new Set(
+  (config.frontendUrls.length ? config.frontendUrls : ['http://localhost:3000'])
+    .map(normalizeOrigin)
+    .filter(Boolean)
+);
+
 app.use(
   cors({
     origin(origin, cb) {
-      // Allow same-origin / no-origin (curl, tests) and any listed frontend.
-      if (!origin || allowedOrigins.includes(origin)) return cb(null, true);
+      // Allow same-origin / no-origin (curl, health checks, server-side fetches).
+      if (!origin) return cb(null, true);
+      if (allowedOrigins.has(normalizeOrigin(origin))) return cb(null, true);
+      console.warn(
+        `[cors] blocked origin ${origin} — add it to FRONTEND_URL (currently: ${[...allowedOrigins].join(', ') || 'unset'})`
+      );
       return cb(new Error('Not allowed by CORS'));
     },
     credentials: true,
@@ -74,4 +93,7 @@ app.use((err, req, res, next) => {
 
 app.listen(config.port, () => {
   console.log(`Yatra backend listening on port ${config.port} (${config.env})`);
+  // Printed on every boot so a CORS misconfiguration is visible in the deploy
+  // log rather than only in a browser console.
+  console.log(`[cors] allowed origins: ${[...allowedOrigins].join(', ') || '(none)'}`);
 });

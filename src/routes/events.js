@@ -182,6 +182,10 @@ router.put('/:id', async (req, res) => {
       if (!EVENT_STATUSES.includes(body.status)) return res.status(400).json({ error: 'Invalid status' });
       update.status = body.status;
     }
+    if (body.timing !== undefined) update.timing = String(body.timing || '');
+    if (body.transport !== undefined) update.transport = String(body.transport || '');
+    if (body.highlights !== undefined) update.highlights = normalizeHighlights(body.highlights);
+    if (body.benefits !== undefined) update.benefits = normalizeLines(body.benefits);
     if (body.dates !== undefined) update.dates = body.dates;
     if (body.timeline !== undefined) update.timeline = body.timeline;
     if (body.tickets !== undefined) update.tickets = body.tickets;
@@ -234,6 +238,30 @@ router.post('/:id/status', async (req, res) => {
     res.status(502).json({ error: String(e) });
   }
 });
+
+
+// ── Poster-derived content ───────────────────────────────────────────────────
+// The printed poster carries three things the event record didn't: the photo
+// highlights, the icon info strip (timing + transport), and the "why join"
+// list. These normalise whatever the admin form sends.
+
+function normalizeHighlights(v) {
+  if (!Array.isArray(v)) return [];
+  return v
+    .map((h) => ({
+      image: String((h && h.image) || '').trim(),
+      title: String((h && h.title) || '').trim(),
+      caption: String((h && h.caption) || '').trim(),
+    }))
+    // A highlight with neither a title nor an image has nothing to show.
+    .filter((h) => h.title || h.image)
+    .slice(0, 12);
+}
+
+function normalizeLines(v) {
+  if (!Array.isArray(v)) return [];
+  return v.map((s) => String(s || '').trim()).filter(Boolean).slice(0, 20);
+}
 
 function toSlug(s) {
   return String(s || '')
@@ -291,6 +319,10 @@ function sanitizeBody(body) {
       : [],
     description: String(body.description || ''),
     venue: String(body.venue || ''),
+    timing: String(body.timing || ''),
+    transport: String(body.transport || ''),
+    highlights: normalizeHighlights(body.highlights),
+    benefits: normalizeLines(body.benefits),
     dates: {
       display: String((body.dates || {}).display || ''),
       start: String((body.dates || {}).start || '') || undefined,
