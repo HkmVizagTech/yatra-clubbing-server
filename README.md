@@ -56,13 +56,59 @@ Health check: `GET /health`
 
 ## Razorpay webhook
 
-In the Razorpay Dashboard → Settings → Webhooks, point it to:
+In the Razorpay Dashboard → Settings → Webhooks, point it at **this backend** —
+not the frontend domain, which has no such route:
 
 ```
-https://yatra-backend.up.railway.app/api/webhook/razorpay
+https://<your-railway-host>/api/webhook/razorpay
 ```
 
-with secret = your `RAZORPAY_WEBHOOK_SECRET`. Enable at least the **`payment.captured`** event (and `order.paid`).
+Set the webhook secret to the same value as `RAZORPAY_WEBHOOK_SECRET` on
+Railway. Without that variable the endpoint returns 500 by design; a mismatch
+returns 400 `Invalid signature`.
+
+**Subscribe to these events:**
+
+| Event | Effect |
+|---|---|
+| `payment.captured` | marks the booking `paid`, sends the WhatsApp confirmation |
+| `order.paid` | same; whichever arrives first wins, the second is a no-op |
+| `payment.failed` | moves a still-`pending` booking to `failed` (never touches a paid one) |
+
+Anything else is acknowledged with `200 {ok:true, ignored:<event>}` so Razorpay
+stops retrying it.
+
+### How a payment is matched to a booking
+
+The handler finds the registration by `order_id`, falling back to the order's
+`receipt` (which equals the booking `ref`). `POST /api/create-order` writes
+`order_id` onto the pending registration *before* the person is sent to
+checkout — that is what lets the webhook reconcile a payment when the browser
+never comes back (tab closed, network dropped, app killed mid-payment). If that
+write is ever missed, the receipt fallback still matches.
+
+Retries are safe: a repeated `x-razorpay-event-id` short-circuits, and the paid
+update is guarded by `payment_status: { $ne: 'paid' }`, so no one gets a second
+WhatsApp message.
+
+### Debugging a payment that didn't confirm
+
+Every accepted delivery is recorded in the **`webhook_events`** collection —
+delivery id, event name, order/payment id, whether it matched a booking, and
+why not if it didn't. That collection is the first place to look when someone
+says they paid but got no confirmation; if there is no row, Razorpay never
+reached this service.
+
+### Testing it
+
+Signature verification, both matching paths, idempotency, `payment.failed`
+precedence and the audit trail are covered by an integration test that runs the
+real app against an in-memory MongoDB:
+
+```bash
+npm i -D mongodb-memory-server
+node webhook.test.mjs
+```
 
 ## Vercel (frontend) setup
 

@@ -54,7 +54,11 @@ app.use(
 
 // The Razorpay webhook needs the RAW body for HMAC signature verification, so it
 // is mounted BEFORE the JSON body parser.
-app.use('/api/webhook/razorpay', express.raw({ type: 'application/json' }), webhookRazorpayRouter);
+// type:'*/*' rather than 'application/json': if Razorpay ever sends a charset
+// parameter or a different content-type, a narrower matcher silently skips the
+// raw parser, and the signature would then be computed over re-serialised JSON
+// that no longer matches the bytes Razorpay signed.
+app.use('/api/webhook/razorpay', express.raw({ type: '*/*', limit: '1mb' }), webhookRazorpayRouter);
 
 // Everything else uses JSON; generous limit to accept base64 student-ID uploads.
 app.use(express.json({ limit: '10mb' }));
