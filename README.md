@@ -110,6 +110,82 @@ npm i -D mongodb-memory-server
 node webhook.test.mjs
 ```
 
+## WhatsApp templates
+
+Three templates, all reusable across every future event. **Nothing event-specific
+is written into the template text** — the event name, date, timing, venue, tier
+names and price all arrive as parameters, read from the event record. Create one
+new yatra in the admin and the same approved templates keep working.
+
+WhatsApp matches parameters **by position**, so the order below and the order in
+`src/lib/whatsapp.js` must stay in lockstep. Once a template is approved you can
+edit its wording but **not** its number of variables, so the slot count is worth
+getting right first time.
+
+### `yatra_booking_confirmation` — 8 variables
+
+| Slot | Value | Source | Fallback |
+|---|---|---|---|
+| `{{1}}` | Devotee name | booking | `Devotee` |
+| `{{2}}` | Event name | event | `Yatra Clubbing` |
+| `{{3}}` | Booking ref | booking | `—` |
+| `{{4}}` | Passes, e.g. `General × 2, Student × 1` | booking + event tier names | `Pass` |
+| `{{5}}` | Amount paid, e.g. `₹297` | booking | `To be shared` |
+| `{{6}}` | Date, e.g. `Sunday, 13 September · 7:00 AM` | event `dates.display` | `To be shared` |
+| `{{7}}` | Timing, e.g. `Early morning · 7 AM to 12 PM` | event `timing` | `To be shared` |
+| `{{8}}` | Reporting point | event `venue` | `To be shared` |
+
+Suggested body (category: **Utility** — it follows a user action, so it needs no
+marketing opt-in):
+
+```
+Hare Krishna {{1}} 🙏
+
+Your booking for {{2}} is confirmed.
+
+Booking ref: {{3}}
+Passes: {{4}}
+Amount paid: {{5}}
+
+Date: {{6}}
+Timing: {{7}}
+Report at: {{8}}
+
+Please keep this message with you on the day. Hare Krishna!
+```
+
+### `student_id_approved` — 4 variables
+
+`{{1}}` name · `{{2}}` event name · `{{3}}` booking ref · `{{4}}` date
+
+### `student_id_rejected` — 4 variables
+
+`{{1}}` name · `{{2}}` event name · `{{3}}` booking ref · `{{4}}` reason
+
+### Rules the sender already enforces
+
+- **No parameter is ever empty.** Meta rejects the whole message if one is, so
+  every slot falls back to readable text rather than being blank or dropped.
+- Newlines, tabs and runs of four or more spaces are stripped from parameter
+  values — Meta rejects those too.
+- Amounts are formatted Indian-style (`₹1,29,900`).
+- Tier names come from the event, so a VIP / couple / group tier reads correctly
+  instead of the generic word "Pass".
+
+### Per-event overrides
+
+Template *names* are per-event, under the admin form's advanced settings
+(`payments.whatsapp.booking` / `studentApproved` / `studentRejected`). Use this
+only if a particular yatra needs different wording — any replacement must keep
+the same slot count and order.
+
+### Testing
+
+```bash
+node params.test.mjs      # parameter building, fallbacks, sanitising
+node webhook.test.mjs     # webhook signature, matching, idempotency
+```
+
 ## Vercel (frontend) setup
 
 Set only ONE variable in the Vercel project:

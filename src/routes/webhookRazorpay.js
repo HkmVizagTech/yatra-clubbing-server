@@ -3,7 +3,7 @@ const express = require('express');
 const config = require('../config');
 const { getDb, isMongoConfigured } = require('../lib/mongodb');
 const { getEventBySlug } = require('../lib/events');
-const { toMobile, passDescription } = require('../lib/whatsapp');
+const { bookingParams, sendTemplate } = require('../lib/whatsapp');
 
 const router = express.Router();
 
@@ -48,36 +48,23 @@ async function sendConfirmation(row) {
   const wToken = config.flaxxa.token;
   if (!wUrl || !wToken || !row.phone) return;
 
-  const mobile = toMobile(row.phone);
-  const passDesc = passDescription(row);
+  // The event supplies name, date, timing and venue, so this template works
+  // unchanged for every future yatra.
+  const eventDoc = (row.event_slug || row.event_code)
+    ? await getEventBySlug(row.event_slug || row.event_code).catch(() => null)
+    : null;
 
-  let templateName = 'yatra_booking_confirmation';
-  if (row.event_slug || row.event_code) {
-    const eventDoc = await getEventBySlug(row.event_slug || row.event_code).catch(() => null);
-    templateName =
-      (eventDoc && eventDoc.payments && eventDoc.payments.whatsapp && eventDoc.payments.whatsapp.booking) ||
-      templateName;
-  }
+  const templateName =
+    (eventDoc && eventDoc.payments && eventDoc.payments.whatsapp && eventDoc.payments.whatsapp.booking) ||
+    'yatra_booking_confirmation';
 
-  return fetch(wUrl, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + wToken },
-    body: JSON.stringify({
-      messaging_product: 'whatsapp',
-      to: mobile,
-      type: 'template',
-      template: {
-        name: templateName,
-        language: { code: 'en' },
-        components: [{ type: 'body', parameters: [
-          { type: 'text', text: row.name || 'Devotee' },
-          { type: 'text', text: passDesc },
-          { type: 'text', text: String(row.total || 0) },
-          { type: 'text', text: row.ref || '' },
-        ] }],
-      },
-    }),
-  }).catch((e) => console.warn('[webhook/razorpay] WhatsApp failed:', e.message));
+  return sendTemplate({
+    url: wUrl,
+    token: wToken,
+    phone: row.phone,
+    templateName,
+    parameters: bookingParams(row, eventDoc),
+  });
 }
 
 // Razorpay sends application/json; we need the RAW body to verify the
