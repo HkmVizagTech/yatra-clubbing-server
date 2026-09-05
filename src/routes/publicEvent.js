@@ -49,6 +49,13 @@ function publicEvent(e) {
 function eventCard(e) {
   const tickets = Array.isArray(e.tickets) ? e.tickets : [];
   const prices = tickets.map((t) => Number(t.price) || 0).filter((n) => n > 0);
+  // The cheapest original (pre-discount) price — only shown when it is genuinely
+  // above the current price, so home cards read "₹199 ~~₹299~~" and never
+  // invent a discount that isn't there.
+  const wasList = tickets
+    .map((t) => ({ was: Number(t.was) || 0, price: Number(t.price) || 0 }))
+    .filter((t) => t.was > 0 && t.was > t.price)
+    .map((t) => t.was);
   return {
     code: e.code,
     name: e.name,
@@ -59,6 +66,7 @@ function eventCard(e) {
     locations: Array.isArray(e.locations) ? e.locations : [],
     dates: e.dates,
     priceFrom: prices.length ? Math.min(...prices) : null,
+    wasFrom: wasList.length ? Math.min(...wasList) : null,
     ticketCount: tickets.length,
     branding: {
       heroDesktop: e.branding && e.branding.heroDesktop,

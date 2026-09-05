@@ -24,6 +24,22 @@ router.post('/', async (req, res) => {
   const tickets = b.tickets || {};
   const payment = b.payment || {};
 
+  // Yatra Clubbing events are student-only, so every registration is a single
+  // student pass. The tier still travels in `tickets` (its key, qty 1) so the
+  // WhatsApp pass description and admin breakdown keep working.
+  const passType = b.pass_type === 'general' ? 'general' : 'student';
+  const name = String(b.name || '').trim();
+  const phone = String(b.phone || '').trim();
+  const college = String(b.college || '').trim();
+  const age = Number(b.age);
+
+  if (passType === 'student') {
+    if (!name) return res.status(400).json({ saved: false, error: 'Full name is required.' });
+    if (!/^[0-9]{10}$/.test(phone)) return res.status(400).json({ saved: false, error: 'Enter a valid 10-digit mobile number.' });
+    if (!college) return res.status(400).json({ saved: false, error: 'College / school name is required.' });
+    if (!Number.isFinite(age) || age < 10 || age > 100) return res.status(400).json({ saved: false, error: 'Enter a valid age.' });
+  }
+
   let idCardUrl = null;
   const idCard = b.idCard || null;
   if (idCard && idCard.data) {
@@ -38,16 +54,22 @@ router.post('/', async (req, res) => {
   }
 
   const now = new Date();
+  const totalQty = Object.values(tickets).reduce((s, n) => s + (Number(n) || 0), 0);
   const setFields = {
     event_code: eventCode || eventSlug,
     event_slug: event.slug || eventSlug,
     ref: b.ref,
-    name: b.name,
-    phone: b.phone,
+    name,
+    phone,
     email: b.email || null,
-    pass_type: tickets.student > 0 && !(tickets.general > 0) ? 'student' : 'general',
-    qty_general: tickets.general || 0,
-    qty_student: tickets.student || 0,
+    age: Number.isFinite(age) ? age : null,
+    college: college || null,
+    course: String(b.course || '').trim() || null,
+    year_of_study: String(b.year_of_study || '').trim() || null,
+    gender: String(b.gender || '').trim() || null,
+    pass_type: passType,
+    qty_general: passType === 'general' ? totalQty : 0,
+    qty_student: passType === 'student' ? totalQty : 0,
     total: b.total || 0,
     student_status: b.studentStatus || null,
     payment_id: payment.paymentId || null,
