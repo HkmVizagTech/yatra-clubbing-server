@@ -1,7 +1,6 @@
 const express = require('express');
 const { getDb, isMongoConfigured } = require('../lib/mongodb');
 const { getEventBySlug, getNextRef } = require('../lib/events');
-const { uploadToCloudinary, parseDataUri } = require('../lib/cloudinary');
 
 const router = express.Router();
 
@@ -40,19 +39,6 @@ router.post('/', async (req, res) => {
     if (!Number.isFinite(age) || age < 10 || age > 100) return res.status(400).json({ saved: false, error: 'Enter a valid age.' });
   }
 
-  let idCardUrl = null;
-  const idCard = b.idCard || null;
-  if (idCard && idCard.data) {
-    try {
-      const { mime, b64 } = parseDataUri(idCard.data, idCard.type);
-      const folder = eventCode ? `student-ids/${eventCode}` : 'student-ids';
-      const publicId = `${b.ref || 'id'}-${Date.now()}`;
-      idCardUrl = await uploadToCloudinary(b64, mime, publicId, folder);
-    } catch (e) {
-      console.warn('[register] Cloudinary upload failed:', e.message);
-    }
-  }
-
   const now = new Date();
   const totalQty = Object.values(tickets).reduce((s, n) => s + (Number(n) || 0), 0);
   const setFields = {
@@ -79,9 +65,6 @@ router.post('/', async (req, res) => {
     raw: { ...b, idCard: undefined },
     updated_at: now,
   };
-  // Only write the ID URL when a fresh upload succeeded, so the later "paid"
-  // update (sent without the file) never wipes a previously stored ID.
-  if (idCardUrl) setFields.id_card_url = idCardUrl;
 
   try {
     const db = await getDb();
@@ -94,7 +77,7 @@ router.post('/', async (req, res) => {
       { $set: setFields, $setOnInsert: { created_at: now } },
       { upsert: true }
     );
-    res.json({ saved: true, idStored: Boolean(idCardUrl) });
+    res.json({ saved: true });
   } catch (e) {
     res.status(502).json({ saved: false, error: String(e) });
   }
