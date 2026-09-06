@@ -16,9 +16,22 @@ function serializeEvent(e) {
 // slug is kept as an optional alias for backwards compatibility with data that
 // predates the code field.
 function findByCodeOrSlug(query) {
+  const raw = String(query || '').trim();
+  if (!raw) return Promise.resolve(null);
+
+  // Codes are stored upper-case and slugs lower-case, but people type URLs and
+  // share links in whatever case they like — /yj must find the same event as
+  // /YJ rather than 404. Matching the normalised forms as well as the raw value
+  // keeps this an exact (index-usable) match instead of a regex scan.
+  const upper = raw.toUpperCase();
+  const lower = raw.toLowerCase();
+
   return getDb().then((db) =>
     db.collection(EVENTS_COLLECTION).findOne({
-      $or: [{ code: query }, { slug: query }],
+      $or: [
+        { code: raw }, { code: upper },
+        { slug: raw }, { slug: lower },
+      ],
     })
   );
 }
@@ -36,7 +49,10 @@ async function getEventBySlug(slug) {
 
 async function getEventByCode(code) {
   const db = await getDb();
-  const row = await db.collection(EVENTS_COLLECTION).findOne({ code });
+  const raw = String(code || '').trim();
+  const row = await db
+    .collection(EVENTS_COLLECTION)
+    .findOne({ $or: [{ code: raw }, { code: raw.toUpperCase() }] });
   return serializeEvent(row);
 }
 

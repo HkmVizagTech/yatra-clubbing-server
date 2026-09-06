@@ -4,6 +4,10 @@ const { getEventBySlug, getNextRef } = require('../lib/events');
 
 const router = express.Router();
 
+// Seat and accommodation on a yatra are allocated separately for men and
+// women, so every student registration carries one of exactly these two.
+const GENDERS = ['male', 'female'];
+
 // POST /api/register
 router.post('/', async (req, res) => {
   const b = req.body || {};
@@ -31,12 +35,14 @@ router.post('/', async (req, res) => {
   const phone = String(b.phone || '').trim();
   const college = String(b.college || '').trim();
   const age = Number(b.age);
+  const gender = String(b.gender || '').trim().toLowerCase();
 
   if (passType === 'student') {
     if (!name) return res.status(400).json({ saved: false, error: 'Full name is required.' });
     if (!/^[0-9]{10}$/.test(phone)) return res.status(400).json({ saved: false, error: 'Enter a valid 10-digit mobile number.' });
     if (!college) return res.status(400).json({ saved: false, error: 'College / school name is required.' });
     if (!Number.isFinite(age) || age < 10 || age > 100) return res.status(400).json({ saved: false, error: 'Enter a valid age.' });
+    if (!GENDERS.includes(gender)) return res.status(400).json({ saved: false, error: 'Please select your gender.' });
   }
 
   const now = new Date();
@@ -52,7 +58,7 @@ router.post('/', async (req, res) => {
     college: college || null,
     course: String(b.course || '').trim() || null,
     year_of_study: String(b.year_of_study || '').trim() || null,
-    gender: String(b.gender || '').trim() || null,
+    gender: GENDERS.includes(gender) ? gender : null,
     pass_type: passType,
     qty_general: passType === 'general' ? totalQty : 0,
     qty_student: passType === 'student' ? totalQty : 0,
