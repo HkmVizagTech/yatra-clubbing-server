@@ -3,7 +3,7 @@ const express = require('express');
 const config = require('../config');
 const { getDb, isMongoConfigured } = require('../lib/mongodb');
 const { getEventBySlug } = require('../lib/events');
-const { bookingParams, sendTemplate } = require('../lib/whatsapp');
+const { sendBookingConfirmation } = require('../lib/whatsapp');
 
 const router = express.Router();
 
@@ -44,9 +44,7 @@ async function audit(db, entry) {
 }
 
 async function sendConfirmation(row) {
-  const wUrl = config.flaxxa.url;
-  const wToken = config.flaxxa.token;
-  if (!wUrl || !wToken || !row.phone) return;
+  if (!row.phone) return;
 
   // The event supplies name, date, timing and venue, so this template works
   // unchanged for every future yatra.
@@ -54,17 +52,7 @@ async function sendConfirmation(row) {
     ? await getEventBySlug(row.event_slug || row.event_code).catch(() => null)
     : null;
 
-  const templateName =
-    (eventDoc && eventDoc.payments && eventDoc.payments.whatsapp && eventDoc.payments.whatsapp.booking) ||
-    'yatra_booking_confirmation';
-
-  return sendTemplate({
-    url: wUrl,
-    token: wToken,
-    phone: row.phone,
-    templateName,
-    parameters: bookingParams(row, eventDoc),
-  });
+  return sendBookingConfirmation(row, eventDoc);
 }
 
 // Razorpay sends application/json; we need the RAW body to verify the

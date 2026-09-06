@@ -1,7 +1,7 @@
 {
   "name": "yatra-backend",
   "version": "1.0.0",
-  "description": "Yatra Clubbing backend (Express + MongoDB) - events, registrations, payments, student-ID verification, WhatsApp/Flaxxa notifications",
+  "description": "Yatra Clubbing backend (Express + MongoDB) - events, registrations, payments, student-ID verification, WhatsApp notifications via Gupshup",
   "main": "src/index.js",
   "type": "commonjs",
   "scripts": {
@@ -13,7 +13,7 @@
   },
   "dependencies": {
     "cors": "^2.8.5",
-    "dotenv": "^16.4.5",
+    "dotenv": "^16.6.1",
     "express": "^4.19.2",
     "mongodb": "^6.8.0"
   }

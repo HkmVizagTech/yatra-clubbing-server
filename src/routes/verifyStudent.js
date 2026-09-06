@@ -2,7 +2,7 @@ const express = require('express');
 const { getDb, isMongoConfigured } = require('../lib/mongodb');
 const { isAdminAuthorized } = require('../lib/auth');
 const { getEventBySlug } = require('../lib/events');
-const { studentParams, sendTemplate } = require('../lib/whatsapp');
+const { sendStudentOutcome } = require('../lib/whatsapp');
 
 const router = express.Router();
 
@@ -34,29 +34,16 @@ router.post('/', async (req, res) => {
 
     if (!row) return res.status(404).json({ updated: false, error: 'Booking not found' });
 
-    const config = require('../config');
-    const wUrl = config.flaxxa.url;
-    const wToken = config.flaxxa.token;
-    if (wUrl && wToken && row.phone) {
+    if (row.phone) {
       // Load the event so the message can name which yatra this is about —
       // with more than one open at a time, the ref alone isn't enough.
       const event = (row.event_slug || row.event_code)
         ? await getEventBySlug(row.event_slug || row.event_code).catch(() => null)
         : null;
 
-      const templates = (event && event.payments && event.payments.whatsapp) || {};
-      const approved = action === 'approve';
-      const templateName = approved
-        ? (templates.studentApproved || 'student_id_approved')
-        : (templates.studentRejected || 'student_id_rejected');
-
-      sendTemplate({
-        url: wUrl,
-        token: wToken,
-        phone: row.phone,
-        templateName,
-        parameters: studentParams(row, event, { approved, reason }),
-      });
+      // Not awaited: the admin's approve/reject click must not wait on WhatsApp,
+      // and sendStudentOutcome never throws.
+      sendStudentOutcome(row, event, { approved: action === 'approve', reason });
     }
 
     return res.json({ updated: true, ref, status: newStatus });

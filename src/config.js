@@ -20,8 +20,20 @@ module.exports = {
     apiKey: process.env.CLOUDINARY_API_KEY,
     apiSecret: process.env.CLOUDINARY_API_SECRET,
   },
-  flaxxa: {
-    url: process.env.FLAXXA_API_URL,
-    token: process.env.FLAXXA_TOKEN,
+  // WhatsApp via Gupshup. The API key is a secret and belongs only in the
+  // Railway environment — never in this repo.
+  gupshup: {
+    apiKey: process.env.GUPSHUP_API_KEY,
+    appId: process.env.GUPSHUP_APP_ID,
+    appName: process.env.GUPSHUP_APP_NAME,
+    source: process.env.GUPSHUP_SOURCE,
+    apiUrl: process.env.GUPSHUP_API_URL || 'https://api.gupshup.io/wa/api/v1/template/msg',
+    // Gupshup addresses templates by UUID. An event can override these in its
+    // advanced settings, but only with a UUID — see resolveTemplateId().
+    templates: {
+      booking: process.env.GUPSHUP_TEMPLATE_BOOKING,
+      studentApproved: process.env.GUPSHUP_TEMPLATE_STUDENT_APPROVED,
+      studentRejected: process.env.GUPSHUP_TEMPLATE_STUDENT_REJECTED,
+    },
   },
 };
