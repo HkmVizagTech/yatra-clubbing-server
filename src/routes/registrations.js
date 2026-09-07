@@ -34,6 +34,44 @@ router.get('/', async (req, res) => {
   }
 });
 
+// PATCH /api/registrations?ref=...   body: { gender: 'male' | 'female' | 'other' | '' }
+//
+// Registrations taken before the booking form had a gender field have none, and
+// buses and the overnight halls are allocated separately — so the team needs to
+// be able to fill it in from the admin list once they know.
+//
+// Deliberately narrow: it can set gender and nothing else. An endpoint that
+// accepted an arbitrary patch would let a stray admin request rewrite a
+// payment_status or a ref.
+const GENDERS = ['male', 'female', 'other'];
+
+router.patch('/', async (req, res) => {
+  if (!requireAdmin(req, res)) return;
+
+  const ref = String(req.query.ref || (req.body && req.body.ref) || '').trim();
+  if (!ref) return res.status(400).json({ error: 'ref required' });
+
+  const raw = String((req.body && req.body.gender) || '').trim().toLowerCase();
+  // '' clears the field again, for a value entered by mistake.
+  if (raw && !GENDERS.includes(raw)) {
+    return res.status(400).json({ error: `gender must be one of ${GENDERS.join(', ')} (or empty to clear)` });
+  }
+  if (!isMongoConfigured()) return res.json({ updated: false, configured: false });
+
+  try {
+    const db = await getDb();
+    const r = await db.collection('registrations').findOneAndUpdate(
+      { ref },
+      { $set: { gender: raw || null, updated_at: new Date() } },
+      { returnDocument: 'after', projection: { _id: 0, ref: 1, name: 1, gender: 1 } }
+    );
+    if (!r) return res.status(404).json({ updated: false, error: 'Booking not found' });
+    return res.json({ updated: true, ref: r.ref, gender: r.gender });
+  } catch (e) {
+    return res.status(502).json({ updated: false, error: String(e) });
+  }
+});
+
 // DELETE /api/registrations?ref=...
 router.delete('/', async (req, res) => {
   if (!requireAdmin(req, res)) return;

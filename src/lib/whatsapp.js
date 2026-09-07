@@ -1,4 +1,5 @@
 const config = require('../config');
+const { getDb, isMongoConfigured } = require('./mongodb');
 
 const FALLBACK = 'To be shared';
 
@@ -206,14 +207,45 @@ function sendGupshup({ phone, templateId, params, label = 'template' }) {
     });
 }
 
-/** Send the booking confirmation for one registration row. */
-function sendBookingConfirmation(row, event) {
-  return sendGupshup({
+/**
+ * Stamp a registration as confirmed-by-WhatsApp.
+ *
+ * This is the record that makes a resend safe. Without it there was no way to
+ * tell who had already been messaged, so a backfill re-messaged everyone — that
+ * is exactly how 15 devotees who had already had their confirmation from the
+ * webhook received a second copy.
+ *
+ * Best-effort on purpose: a booking that was messaged but failed to record is a
+ * far better outcome than an exception thrown into a paid-payment callback.
+ */
+async function recordConfirmationSent(ref, result) {
+  if (!ref || !isMongoConfigured()) return;
+  try {
+    const db = await getDb();
+    await db.collection('registrations').updateOne(
+      { ref },
+      {
+        $set: {
+          whatsapp_sent_at: new Date(),
+          whatsapp_message_id: (result && result.messageId) || null,
+        },
+      }
+    );
+  } catch (e) {
+    console.warn('[whatsapp] could not record send for', ref, '-', e.message);
+  }
+}
+
+/** Send the booking confirmation for one registration row, and record it. */
+async function sendBookingConfirmation(row, event) {
+  const result = await sendGupshup({
     phone: row && row.phone,
     templateId: resolveTemplateId('booking', event),
     params: bookingParams(row, event),
     label: 'booking confirmation',
   });
+  if (result.sent) await recordConfirmationSent(row && row.ref, result);
+  return result;
 }
 
 /** Send the student-ID approved / rejected outcome. */
@@ -237,6 +269,7 @@ module.exports = {
   studentParams,
   resolveTemplateId,
   sendGupshup,
+  recordConfirmationSent,
   sendBookingConfirmation,
   sendStudentOutcome,
 };

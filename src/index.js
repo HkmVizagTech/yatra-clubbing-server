@@ -15,6 +15,7 @@ const webhookRazorpayRouter = require('./routes/webhookRazorpay');const adminSes
 const adminRefundAllRouter = require('./routes/admin/refundAll');
 const adminRefundAuditRouter = require('./routes/admin/refundAudit');
 const adminRefundManualRouter = require('./routes/admin/refundManual');
+const adminSendConfirmationsRouter = require('./routes/admin/sendConfirmations');
 const { publicRouter: collegesPublicRouter, adminRouter: collegesAdminRouter } = require('./routes/colleges');
 
 const app = express();
@@ -83,6 +84,7 @@ app.use('/api/admin', adminSessionRouter);
 app.use('/api/admin', adminRefundAllRouter);
 app.use('/api/admin', adminRefundAuditRouter);
 app.use('/api/admin', adminRefundManualRouter);
+app.use('/api/admin', adminSendConfirmationsRouter);
 app.use('/api/admin/colleges', collegesAdminRouter);
 
 // Fallback: unknown API route

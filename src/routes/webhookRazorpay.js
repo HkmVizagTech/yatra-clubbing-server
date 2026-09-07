@@ -171,7 +171,17 @@ router.post('/', async (req, res) => {
         reason: exists ? 'already ' + exists.payment_status : 'no matching booking',
       });
       if (!exists) {
-        console.warn('[webhook/razorpay] PAID but no matching booking — order', orderId, 'receipt', receipt);
+        // This Razorpay account is shared with the other apps, so every payment
+        // they take also arrives here and legitimately matches no Yatra
+        // booking. Logging that at warning level buried the real problems in
+        // red, so an unknown order is now an ordinary info line; only an order
+        // carrying one of OUR receipt prefixes is worth shouting about.
+        const ours = typeof receipt === 'string' && /^YC-/i.test(receipt);
+        if (ours) {
+          console.warn('[webhook/razorpay] PAID but no matching Yatra booking — order', orderId, 'receipt', receipt);
+        } else {
+          console.log('[webhook/razorpay] paid order not from Yatra (another app on this Razorpay account) — order', orderId);
+        }
       }
       return res.json({ ok: true, reconciled: false });
     }
