@@ -62,10 +62,18 @@ router.post('/', async (req, res) => {
       const db = await getDb();
       const query = { ref: bookingRef };
       if (eventId) query.event_code = eventId;
-      await db.collection('registrations').updateOne(
+      const upd = await db.collection('registrations').updateOne(
         query,
         { $set: { order_id: order.id, updated_at: new Date() } }
       );
+      // Matching nothing means the browser's pre-save never landed (it is a
+      // best-effort call and swallows its own errors). The payment will still
+      // go through, but the webhook will have no row to reconcile it against —
+      // so say so here, while the ref is still in hand.
+      if (upd.matchedCount === 0) {
+        console.warn('[create-order] no pending registration for ref', bookingRef,
+          '— order', order.id, 'will not reconcile until that row exists');
+      }
     } catch (e) {
       // Never block checkout on this — the browser still reports the payment.
       console.warn('[create-order] could not attach order_id to', bookingRef, '-', e.message);
