@@ -11,7 +11,8 @@ const createOrderRouter = require('./routes/createOrder');
 const verifyPaymentRouter = require('./routes/verifyPayment');
 const verifyStudentRouter = require('./routes/verifyStudent');
 const whatsappRouter = require('./routes/whatsapp');
-const webhookRazorpayRouter = require('./routes/webhookRazorpay');const adminSessionRouter = require('./routes/admin/session');
+const webhookRazorpayRouter = require('./routes/webhookRazorpay');
+const webhookGupshupRouter = require('./routes/webhookGupshup');const adminSessionRouter = require('./routes/admin/session');
 const adminRefundAllRouter = require('./routes/admin/refundAll');
 const adminRefundAuditRouter = require('./routes/admin/refundAudit');
 const adminRefundManualRouter = require('./routes/admin/refundManual');
@@ -60,6 +61,10 @@ app.use(
 // raw parser, and the signature would then be computed over re-serialised JSON
 // that no longer matches the bytes Razorpay signed.
 app.use('/api/webhook/razorpay', express.raw({ type: '*/*', limit: '1mb' }), webhookRazorpayRouter);
+
+// Same treatment for the Gupshup delivery callback — it needs the raw bytes
+// when GUPSHUP_WEBHOOK_SECRET is configured.
+app.use('/api/webhook/gupshup', express.raw({ type: '*/*', limit: '1mb' }), webhookGupshupRouter);
 
 // Everything else uses JSON; generous limit to accept base64 student-ID uploads.
 app.use(express.json({ limit: '10mb' }));

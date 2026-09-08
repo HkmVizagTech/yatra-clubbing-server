@@ -28,6 +28,9 @@ module.exports = {
     appName: process.env.GUPSHUP_APP_NAME,
     source: process.env.GUPSHUP_SOURCE,
     apiUrl: process.env.GUPSHUP_API_URL || 'https://api.gupshup.io/wa/api/v1/template/msg',
+    // Optional secret for verifying /api/webhook/gupshup callbacks. Gupshup
+    // signs with the app token: set this to the same value to require it.
+    webhookSecret: process.env.GUPSHUP_WEBHOOK_SECRET,
     // Gupshup addresses templates by UUID. An event can override these in its
     // advanced settings, but only with a UUID — see resolveTemplateId().
     templates: {

@@ -33,6 +33,7 @@ async function ensureIndexes(db) {
       db.collection('events').createIndex({ code: 1 }, { unique: true }),
       db.collection('events').createIndex({ slug: 1 }, { unique: true, sparse: true }),
       db.collection('events').createIndex({ status: 1 }),
+      db.collection('webhook_events').createIndex({ source: 1, dedupe: 1 }, { unique: true, sparse: true }),
     ]);
   } catch (e) {
     // unique index conflicts (legacy data) should never block a request
