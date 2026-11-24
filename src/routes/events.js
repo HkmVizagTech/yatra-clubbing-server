@@ -230,7 +230,10 @@ router.post('/:id/attendees', async (req, res) => {
 router.post('/:id/attendees/sync', async (req, res) => {
   if (!requireAdmin(req, res)) return;
   if (!vbConfigured()) {
-    return res.status(503).json({ error: 'The Vanabhojanam connection is not set up on the server yet (VANABHOJANAM_API_URL and VANABHOJANAM_API_KEY).' });
+    // Say exactly which one is empty, so the fix is obvious on Railway.
+    const cfg = require('../config').vanabhojanam;
+    const missing = [!cfg.apiUrl && 'VANABHOJANAM_API_URL', !cfg.apiKey && 'VANABHOJANAM_API_KEY'].filter(Boolean);
+    return res.status(503).json({ error: `The Vanabhojanam connection is not set up on this server. Missing variable on the Yatra backend: ${missing.join(' and ')}. Add it in Railway, then deploy.` });
   }
   try {
     const event = await getEventBySlug(req.params.id);
