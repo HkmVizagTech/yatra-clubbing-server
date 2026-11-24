@@ -10,8 +10,13 @@ const {
   createEvent,
   getRegistrationCountForEvent,
   isCodeAvailable,
+  isSlugAvailable,
+  hasEnded,
   ensureCodeIndex,
 } = require('../lib/events');
+
+const { mergeAttendees, attendeeSummary, clearAttendees } = require('../lib/attendees');
+const { fetchAttendees, configured: vbConfigured } = require('../lib/vanabhojanam');
 
 const router = express.Router();
 
@@ -37,6 +42,21 @@ function codeProblem(code) {
   if (!code) return 'A public code is required — this becomes the event URL.';
   if (!CODE_RE.test(code)) return 'Use 2–12 letters and numbers only, e.g. YJ or RCY26.';
   if (RESERVED_CODES.has(code)) return `"${code}" is reserved by the site. Pick another code.`;
+  return null;
+}
+// The page link (slug) is the readable URL, e.g. /ramateertham-trip.
+const SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+const RESERVED_SLUGS = new Set([
+  'admin', 'login', 'logout', 'api', 'success', 'events', 'event', 'register', 'registrations',
+  'book', 'booking', 'refund', 'public', 'static', 'assets', 'favicon.ico', 'robots.txt',
+  'sitemap.xml', '_next', 'www',
+]);
+function slugProblem(slug) {
+  if (!slug) return 'A page link is required.';
+  if (slug.length < 3 || slug.length > 60 || !SLUG_RE.test(slug)) {
+    return 'Use 3–60 lowercase letters, numbers and single hyphens, e.g. ramateertham-trip.';
+  }
+  if (RESERVED_SLUGS.has(slug)) return `"${slug}" is reserved by the site. Pick another link.`;
   return null;
 }
 const TICKET_KEYS = new Set(['general', 'student', 'vip', 'group', 'couple']);
@@ -103,7 +123,23 @@ router.post('/', async (req, res) => {
     if (!(await isCodeAvailable(code))) {
       return res.status(409).json({ error: `The code "${code}" is already used by another event.`, field: 'code' });
     }
-    const data = sanitizeBody({ ...body, code });
+    // Page link: use what the admin typed, otherwise build it from the name.
+    const explicit = toSlug(body.slug);
+    let slug = explicit || toSlug(body.name);
+    const sp = slugProblem(slug);
+    if (sp) {
+      if (explicit) return res.status(400).json({ error: sp, field: 'slug' });
+      slug = (slug && slug.length >= 3 ? slug : 'trip') + '-trip';
+    }
+    if (!(await isSlugAvailable(slug))) {
+      if (explicit) {
+        return res.status(409).json({ error: `The link "${slug}" is already used by another event.`, field: 'slug' });
+      }
+      let n = 2;
+      while (!(await isSlugAvailable(`${slug}-${n}`))) n++;
+      slug = `${slug}-${n}`;
+    }
+    const data = sanitizeBody({ ...body, code, slug });
     const event = await createEvent(data);
     res.status(201).json({ event });
   } catch (e) {
@@ -134,6 +170,100 @@ router.get('/check-code', async (req, res) => {
   }
 });
 
+// GET /api/events/check-slug?slug=ramateertham-trip&except=<eventId>
+router.get('/check-slug', async (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  const slug = toSlug(req.query.slug);
+  const problem = slugProblem(slug);
+  if (problem) return res.json({ slug, available: false, error: problem });
+  try {
+    const available = await isSlugAvailable(slug, req.query.except || undefined);
+    res.json({ slug, available, error: available ? null : `The link "${slug}" is already used by another event.` });
+  } catch (e) {
+    res.status(502).json({ error: String(e) });
+  }
+});
+
+// ── Returning attendees (Excel upload) ───────────────────────────────────────
+// The browser reads the spreadsheet and sends the mobile numbers it found; the
+// list replaces any earlier one for this event.
+router.get('/:id/attendees', async (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  try {
+    const event = await getEventBySlug(req.params.id);
+    if (!event) return res.status(404).json({ error: 'Not found' });
+    res.json(await attendeeSummary(event._id));
+  } catch (e) {
+    res.status(502).json({ error: String(e) });
+  }
+});
+
+// POST /api/events/:id/attendees { entries: [{ phone, name }] }  (or { phones: [...] })
+// ADDS to the trip's returning-attendee list. Two rows are the same person only
+// when BOTH the number and the name match; everything else is kept.
+router.post('/:id/attendees', async (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  const body = req.body || {};
+  const entries = Array.isArray(body.entries) ? body.entries : Array.isArray(body.phones) ? body.phones : null;
+  if (!entries) return res.status(400).json({ error: 'Send { entries: [{ phone, name }] }.' });
+  if (entries.length > 200000) return res.status(413).json({ error: 'That list is too large.' });
+  try {
+    const event = await getEventBySlug(req.params.id);
+    if (!event) return res.status(404).json({ error: 'Not found' });
+    const result = await mergeAttendees(event._id, entries, 'excel');
+    if (result.added + result.updated + result.duplicates === 0) {
+      return res.status(400).json({ error: 'No valid 10-digit mobile numbers were found in that file.', ...result });
+    }
+    res.json({ ...result, ...(await attendeeSummary(event._id)) });
+  } catch (e) {
+    res.status(502).json({ error: String(e) });
+  }
+});
+
+// POST /api/events/:id/attendees/sync — pull "who attended Vanabhojanam" straight from
+// its API and ADD them to this trip's returning-attendee list (anything uploaded
+// from Excel stays; people already on the list are not duplicated).
+router.post('/:id/attendees/sync', async (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  if (!vbConfigured()) {
+    return res.status(503).json({ error: 'The Vanabhojanam connection is not set up on the server yet (VANABHOJANAM_API_URL and VANABHOJANAM_API_KEY).' });
+  }
+  try {
+    const event = await getEventBySlug(req.params.id);
+    if (!event) return res.status(404).json({ error: 'Not found' });
+    let attendees;
+    try {
+      attendees = await fetchAttendees(req.body && req.body.who === 'paid' ? 'paid' : 'attended');
+    } catch (e) {
+      return res.status(502).json({ error: e.message });
+    }
+    if (attendees.length === 0) {
+      return res.status(400).json({
+        error: (req.body && req.body.who === 'paid')
+          ? 'Vanabhojanam returned nobody who has paid, so nothing was added.'
+          : 'Vanabhojanam has no attendance records yet (nobody has been scanned in), so nothing was added. You can sync everyone who paid instead.',
+        empty: true,
+      });
+    }
+    const result = await mergeAttendees(event._id, attendees, 'vanabhojanam');
+    res.json({ ...result, ...(await attendeeSummary(event._id)) });
+  } catch (e) {
+    res.status(502).json({ error: String(e) });
+  }
+});
+
+router.delete('/:id/attendees', async (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  try {
+    const event = await getEventBySlug(req.params.id);
+    if (!event) return res.status(404).json({ error: 'Not found' });
+    const removed = await clearAttendees(event._id);
+    res.json({ removed });
+  } catch (e) {
+    res.status(502).json({ error: String(e) });
+  }
+});
+
 // GET /api/events/:id  (id may be a short code or legacy slug)
 router.get('/:id', async (req, res) => {
   if (!requireAdmin(req, res)) return;
@@ -157,6 +287,13 @@ router.put('/:id', async (req, res) => {
     const existing = await getEventBySlug(id);
     if (!existing) return res.status(404).json({ error: 'Not found' });
 
+    // A trip whose date has passed can't be published again. Change its dates first.
+    const nextStatus = body.status !== undefined ? body.status : existing.status;
+    const nextDates = body.dates !== undefined ? body.dates : existing.dates;
+    if (nextStatus === 'active' && hasEnded({ dates: nextDates })) {
+      return res.status(400).json({ error: "This trip's date has already passed, so it can't be live. Change its dates first, or leave it closed.", field: 'status' });
+    }
+
     const update = {};
     if (body.code !== undefined) {
       const code = normalizeCode(body.code);
@@ -167,7 +304,17 @@ router.put('/:id', async (req, res) => {
       }
       update.code = code;
     }
-    if (body.slug !== undefined) update.slug = toSlug(body.slug);
+    if (body.slug !== undefined) {
+      const slug = toSlug(body.slug);
+      if (slug) {
+        const sp = slugProblem(slug);
+        if (sp) return res.status(400).json({ error: sp, field: 'slug' });
+        if (slug !== existing.slug && !(await isSlugAvailable(slug, existing._id))) {
+          return res.status(409).json({ error: `The link "${slug}" is already used by another event.`, field: 'slug' });
+        }
+        update.slug = slug;
+      }
+    }
     if (body.name !== undefined) update.name = String(body.name);
     if (body.tagline !== undefined) update.tagline = String(body.tagline);
     if (body.org !== undefined) update.org = String(body.org);
@@ -191,6 +338,8 @@ router.put('/:id', async (req, res) => {
     if (body.tickets !== undefined) update.tickets = body.tickets;
     if (body.branding !== undefined) update.branding = body.branding;
     if (body.payments !== undefined) update.payments = body.payments;
+    // keep the server-written last-sync fields (lastSyncAt …) when the admin saves the form
+    if (body.returning !== undefined) update.returning = { ...(existing.returning || {}), ...normalizeReturning(body.returning) };
 
     const event = await updateEvent(id, update);
     if (!event) return res.status(404).json({ error: 'Not found' });
@@ -231,6 +380,12 @@ router.post('/:id/status', async (req, res) => {
     return res.status(400).json({ error: 'Invalid status' });
   }
   try {
+    if (body.status === 'active') {
+      const current = await getEventBySlug(id);
+      if (current && hasEnded(current)) {
+        return res.status(400).json({ error: "This trip's date has already passed, so it can't be live. Change its dates first." });
+      }
+    }
     const event = await setEventStatus(id, body.status);
     if (!event) return res.status(404).json({ error: 'Not found' });
     res.json({ event });
@@ -271,6 +426,17 @@ function toSlug(s) {
     .replace(/^-+|-+$/g, '');
 }
 
+// How returning attendees are treated. skipId: they don't have to upload a student ID.
+function normalizeReturning(v) {
+  const r = v && typeof v === 'object' ? v : {};
+  return {
+    skipId: r.skipId === true,
+    label: String(r.label || '').trim().slice(0, 40),
+    // pull new attendees from Vanabhojanam every hour (see lib/autoSync.js)
+    autoSync: r.autoSync === true,
+  };
+}
+
 function sanitizeBody(body) {
   const slug = toSlug(body.slug) || 'event-' + Date.now().toString(36);
   const code =
@@ -288,6 +454,7 @@ function sanitizeBody(body) {
       name: String(t.name || key),
       price: Number(t.price) || 0,
       was: t.was == null ? null : Number(t.was),
+      returningPrice: t.returningPrice == null || t.returningPrice === '' ? null : Math.max(0, Number(t.returningPrice) || 0),
       maxQty: Number(t.maxQty) || (key === 'student' ? 1 : 20),
       description: String(t.description || ''),
       tag: t.tag ? String(t.tag) : undefined,
@@ -308,6 +475,7 @@ function sanitizeBody(body) {
   const w = p.whatsapp || {};
 
   return {
+    returning: normalizeReturning(body.returning),
     code,
     slug,
     name: String(body.name || 'Untitled event'),

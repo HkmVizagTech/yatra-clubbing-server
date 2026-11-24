@@ -12,7 +12,12 @@ const verifyPaymentRouter = require('./routes/verifyPayment');
 const verifyStudentRouter = require('./routes/verifyStudent');
 const whatsappRouter = require('./routes/whatsapp');
 const webhookRazorpayRouter = require('./routes/webhookRazorpay');
-const webhookGupshupRouter = require('./routes/webhookGupshup');const adminSessionRouter = require('./routes/admin/session');
+const webhookGupshupRouter = require('./routes/webhookGupshup');
+const adminAuthRouter = require('./routes/admin/auth');
+const adminUsersRouter = require('./routes/admin/users');
+const { authenticate, enforce } = require('./lib/auth');
+const { ensureBootstrapAdmin } = require('./lib/adminUsers');
+const { isMongoConfigured } = require('./lib/mongodb');
 const adminRefundAllRouter = require('./routes/admin/refundAll');
 const adminRefundAuditRouter = require('./routes/admin/refundAudit');
 const adminRefundManualRouter = require('./routes/admin/refundManual');
@@ -73,6 +78,11 @@ app.use(express.urlencoded({ extended: true }));
 // Health check (used by Railway / uptime monitors)
 app.get('/health', (req, res) => res.json({ ok: true, service: 'yatra-backend' }));
 
+// Sign-in + role check for every /api request. Public booking routes aren't in
+// the policy table (lib/permissions.js) and pass straight through; everything
+// admin-facing needs a valid JWT and the right permission.
+app.use('/api', authenticate, enforce);
+
 // Public + booking routes
 app.use('/api/public', publicEventRouter);
 app.use('/api/events', eventsRouter);
@@ -85,7 +95,8 @@ app.use('/api/whatsapp', whatsappRouter);
 app.use('/api/colleges', collegesPublicRouter);
 
 // Admin routes
-app.use('/api/admin', adminSessionRouter);
+app.use('/api/admin/auth', adminAuthRouter);
+app.use('/api/admin/users', adminUsersRouter);
 app.use('/api/admin', adminRefundAllRouter);
 app.use('/api/admin', adminRefundAuditRouter);
 app.use('/api/admin', adminRefundManualRouter);
@@ -109,4 +120,13 @@ app.listen(config.port, () => {
   // Printed on every boot so a CORS misconfiguration is visible in the deploy
   // log rather than only in a browser console.
   console.log(`[cors] allowed origins: ${[...allowedOrigins].join(', ') || '(none)'}`);
+  if (isMongoConfigured()) {
+    ensureBootstrapAdmin();
+    // Close live trips whose date has passed, now and every 5 minutes.
+    const { closeExpiredEvents } = require('./lib/events');
+    closeExpiredEvents(true).catch((e) => console.warn('[events] sweep skipped:', e.message));
+    setInterval(() => closeExpiredEvents(true).catch(() => {}), 5 * 60 * 1000).unref();
+    // Top up each opted-in trip's special-price list from Vanabhojanam every hour.
+    require('./lib/autoSync').startAutoSync(process.env.AUTO_SYNC_MINUTES || 10);
+  }
 });

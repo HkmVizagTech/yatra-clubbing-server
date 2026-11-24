@@ -1,10 +1,11 @@
 const express = require('express');
 const { getActiveEvent, getActiveEvents, getEventBySlug } = require('../lib/events');
+const { hasAttendeeList, isReturningAttendee } = require('../lib/attendees');
 
 const router = express.Router();
 
 // Full shape used by an event's own landing page.
-function publicEvent(e) {
+function publicEvent(e, opts = {}) {
   return {
     code: e.code,
     slug: e.slug,
@@ -26,6 +27,7 @@ function publicEvent(e) {
       name: t.name,
       price: t.price,
       was: t.was,
+      returningPrice: t.returningPrice == null ? null : t.returningPrice,
       maxQty: t.maxQty,
       description: t.description,
       tag: t.tag,
@@ -41,8 +43,28 @@ function publicEvent(e) {
     },
     // The booking ref prefix belongs to the event, so refs read YJ-… not YC-….
     receiptPrefix: (e.payments && e.payments.receiptPrefix) || 'YC-',
+    // true when the admin has uploaded a returning-attendee list for this event
+    returning: {
+      enabled: !!opts.returningEnabled,
+      // returning attendees don't have to upload a student ID
+      skipId: !!(e.returning && e.returning.skipId),
+      // e.g. "Vanabhojanam", used in the booking form's wording
+      label: (e.returning && e.returning.label) || '',
+    },
     status: e.status,
+    // the trip's date has passed (so the page says "ended", not just "closed")
+    ended: !!e.ended,
   };
+}
+
+// Does this event have an uploaded attendee list? Never throws — a database
+// hiccup just means "no special pricing is advertised".
+async function listEnabled(event) {
+  try {
+    return await hasAttendeeList(String(event._id));
+  } catch (e) {
+    return false;
+  }
 }
 
 // Trimmed shape for the home page's chooser cards — enough to decide, no more.
@@ -58,6 +80,7 @@ function eventCard(e) {
     .map((t) => t.was);
   return {
     code: e.code,
+    slug: e.slug,
     name: e.name,
     tagline: e.tagline,
     org: e.org,
@@ -95,7 +118,7 @@ router.get('/event/:code', async (req, res) => {
   try {
     const event = await getEventBySlug(String(req.params.code || '').trim());
     if (!event) return res.status(404).json({ event: null, error: 'Event not found' });
-    res.json({ event: publicEvent(event) });
+    res.json({ event: publicEvent(event, { returningEnabled: await listEnabled(event) }) });
   } catch (e) {
     res.status(502).json({ error: String(e) });
   }
@@ -109,9 +132,34 @@ router.get('/event', async (req, res) => {
     if (!event) {
       return res.json({ event: null, message: 'No active event right now.' });
     }
-    res.json({ event: publicEvent(event) });
+    res.json({ event: publicEvent(event, { returningEnabled: await listEnabled(event) }) });
   } catch (e) {
     res.status(502).json({ error: String(e) });
+  }
+});
+
+// POST /api/public/check-attendee { event_code, phone } -> { checkable, listed }
+// Only a yes/no for ONE number is ever returned, and calls are rate limited, so
+// the uploaded list can't be read out through here.
+const hits = new Map();
+function rateLimited(ip) {
+  const now = Date.now();
+  const rec = hits.get(ip) || { n: 0, t: now };
+  if (now - rec.t > 10 * 60 * 1000) { rec.n = 0; rec.t = now; }
+  rec.n += 1;
+  hits.set(ip, rec);
+  return rec.n > 40;
+}
+router.post('/check-attendee', async (req, res) => {
+  if (rateLimited(req.ip || 'x')) return res.status(429).json({ error: 'Too many checks. Try again in a few minutes.' });
+  try {
+    const body = req.body || {};
+    const event = await getEventBySlug(String(body.event_code || '').trim());
+    if (!event) return res.status(404).json({ error: 'Event not found' });
+    if (!(await hasAttendeeList(String(event._id)))) return res.json({ checkable: false, listed: false });
+    res.json({ checkable: true, listed: await isReturningAttendee(String(event._id), body.phone) });
+  } catch (e) {
+    res.status(502).json({ error: 'Could not check right now.' });
   }
 });
 

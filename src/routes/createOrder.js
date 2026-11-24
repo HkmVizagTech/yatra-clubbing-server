@@ -2,6 +2,7 @@ const express = require('express');
 const config = require('../config');
 const { getDb, isMongoConfigured } = require('../lib/mongodb');
 const { getEventBySlug } = require('../lib/events');
+const { resolvePrice } = require('../lib/pricing');
 
 const router = express.Router();
 
@@ -13,8 +14,7 @@ router.post('/', async (req, res) => {
   }
 
   const body = req.body || {};
-  const amount = body.amount;
-  if (!amount) return res.status(400).json({ error: 'amount required' });
+  let amount = body.amount;
 
   // Ensure the receipt uses the event's prefix so refund-audit scopes correctly.
   let finalReceipt = body.receipt || 'yatra';
@@ -22,12 +22,28 @@ router.post('/', async (req, res) => {
   if (eventId) {
     const event = await getEventBySlug(eventId);
     if (!event) return res.status(404).json({ error: 'Event not found' });
+    if (event.status !== 'active') {
+      return res.status(409).json({ error: event.ended ? 'This trip has ended, so registrations are closed.' : 'Registrations for this trip are closed.', closed: true });
+    }
+    // The amount charged is the tier's price from the event (set in admin), not
+    // whatever number the browser sent.
+    if (body.tier_key) {
+      const tier = (event.tickets || []).find((t) => t.key === body.tier_key);
+      if (!tier) return res.status(400).json({ error: 'Unknown pass' });
+      try {
+        amount = (await resolvePrice(event, tier, body.phone)).amount;
+      } catch (e) {
+        return res.status(502).json({ error: 'Could not confirm the price right now. Please try again.' });
+      }
+    }
     const prefix = (event.payments && event.payments.receiptPrefix) || 'YC-';
     if (!finalReceipt.startsWith(prefix)) {
       finalReceipt = finalReceipt.replace(/^[A-Za-z]{1,3}-/, '');
       finalReceipt = prefix + finalReceipt.toUpperCase();
     }
   }
+
+  if (!amount) return res.status(400).json({ error: 'amount required' });
 
   const credentials = Buffer.from(`${keyId}:${keySecret}`).toString('base64');
   const r = await fetch('https://api.razorpay.com/v1/orders', {

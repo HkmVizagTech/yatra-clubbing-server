@@ -236,14 +236,56 @@ async function recordConfirmationSent(ref, result) {
   }
 }
 
-/** Send the booking confirmation for one registration row, and record it. */
+/**
+ * Flaxxa WAPI: the approved "trip_booking_confirmation" template (language en_US).
+ * Body variables, in order: {{1}} name, {{2}} trip name, {{3}} booking ref,
+ * {{4}} date, {{5}} amount paid. Flaxxa answers HTTP 200 even when it refuses
+ * the message, so success means a message_wamid came back.
+ */
+async function sendFlaxxaBooking(row, event) {
+  const token = process.env.FLAXXA_TOKEN;
+  if (!token) return { sent: false, reason: 'Flaxxa token not set' };
+  if (!row || !row.phone) return { sent: false, reason: 'Missing phone' };
+  const f = eventFields(row, event);
+  const values = [param(row.name, 'Devotee'), f.eventName, f.ref, f.date, f.amount];
+  try {
+    const r = await fetch(process.env.FLAXXA_API_URL || 'https://wapi.flaxxa.com/api/v1/sendtemplatemessage', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        token,
+        phone: toMobile(row.phone),
+        template_name: process.env.FLAXXA_TEMPLATE_BOOKING || 'trip_booking_confirmation',
+        template_language: process.env.FLAXXA_TEMPLATE_LANG || 'en_US',
+        components: [{ type: 'body', parameters: values.map((text) => ({ type: 'text', text })) }],
+      }),
+    });
+    const text = await r.text();
+    let body = null;
+    try { body = JSON.parse(text); } catch { /* not JSON */ }
+    const wamid = body && (body.message_wamid || body.wamid);
+    if (!r.ok || !wamid) {
+      console.warn('[whatsapp] flaxxa booking', r.status, text.slice(0, 300));
+      return { sent: false, status: r.status, error: (body && body.message) || text.slice(0, 200) };
+    }
+    return { sent: true, messageId: wamid, via: 'flaxxa' };
+  } catch (e) {
+    console.warn('[whatsapp] flaxxa send failed:', e.message);
+    return { sent: false, error: e.message };
+  }
+}
+
+/** Send the booking confirmation for one registration row, and record it. Flaxxa first, Gupshup as the fallback. */
 async function sendBookingConfirmation(row, event) {
-  const result = await sendGupshup({
-    phone: row && row.phone,
-    templateId: resolveTemplateId('booking', event),
-    params: bookingParams(row, event),
-    label: 'booking confirmation',
-  });
+  let result = await sendFlaxxaBooking(row, event);
+  if (!result.sent) {
+    result = await sendGupshup({
+      phone: row && row.phone,
+      templateId: resolveTemplateId('booking', event),
+      params: bookingParams(row, event),
+      label: 'booking confirmation',
+    });
+  }
   if (result.sent) await recordConfirmationSent(row && row.ref, result);
   return result;
 }
@@ -269,6 +311,7 @@ module.exports = {
   studentParams,
   resolveTemplateId,
   sendGupshup,
+  sendFlaxxaBooking,
   recordConfirmationSent,
   sendBookingConfirmation,
   sendStudentOutcome,

@@ -32,12 +32,43 @@ Health check: `GET /health`
 | `POST /api/events/:id/status` | admin | Set event status |
 | `GET/DELETE /api/registrations` | admin | List/delete registrations |
 | `POST /api/verify-student` | admin | Approve/reject student ID + WhatsApp |
-| `POST /api/admin/login` / `logout` | — | Admin token session |
+| `POST /api/admin/auth/login` / `logout` | public | Email + password sign-in → JWT |
+| `GET /api/admin/auth/me`, `POST …/change-password` | signed in | Current user + permissions; change own password |
+| `GET/POST/PATCH /api/admin/users` | `users:manage` | Team members: add, change role, disable, reset password |
+| `GET/POST/DELETE /api/events/:id/attendees` | events | Returning-attendee list (Excel upload) |
+| `POST /api/public/check-attendee` | public (rate-limited) | Is this mobile number on the returning list? |
 | `GET/POST /api/admin/refund-all` | admin | Bulk refunds |
 | `GET /api/admin/refund-audit` | admin | Razorpay reconciliation audit |
 | `POST /api/admin/refund-manual` | admin | Refund by payment ID |
 
-**Admin auth:** the `ADMIN_TOKEN` is posted to `/api/admin/login`, which returns `{ ok, token }`. The frontend stores it and sends it as `Authorization: Bearer <token>` on every admin call. (The backend also sets an optional `yc_admin_token` cookie.)
+**Admin auth (JWT + roles):** people sign in with email and password at `/api/admin/auth/login` and get a signed JWT (HS256, 12h by default), sent as `Authorization: Bearer <token>`. Passwords are hashed with scrypt. On every request the user is re-loaded from the database, so disabling someone, changing their role or resetting their password takes effect immediately. Login is throttled (8 failures per email + IP per 15 min).
+
+Roles and what they can do live in `src/lib/permissions.js`, and the route → permission table there is enforced centrally for every `/api` request (anything unlisted under `/api/admin` is super-admin only):
+
+| Role | Can do |
+|---|---|
+| `super_admin` | Everything, incl. managing team members |
+| `admin` | Trips, registrations, ID verification, refunds, revenue |
+| `verifier` | See registrations, approve/reject student IDs. No revenue |
+| `viewer` | Read-only dashboard, trips, registrations. No revenue |
+| `devotee` | Read-only registrations + dashboard counts |
+
+Revenue figures and payment IDs are only returned to roles with `dashboard:revenue` (super admin, admin).
+
+**First admin:** with an empty `admin_users` collection, the server creates a super admin from `ADMIN_EMAIL` / `ADMIN_PASSWORD` on startup (ignored afterwards), or run `npm run create-admin -- <email> <password> "Name" super_admin`. Run `npm test` for the auth tests.
+
+### Returning attendees (cheaper price, no ID)
+
+A trip can give people who attended an earlier trip a different price and skip the student-ID upload. The list is **live and cumulative** and has two sources:
+
+- **Excel / CSV upload** in the trip form (Name + Mobile columns). Every upload *adds*; nothing is replaced.
+- **Sync from Vanabhojanam**: pulls name + number from Vanabhojanam's `GET /integrations/attendees` (header `x-api-key`). `?who=attended` (default) or `?who=paid`.
+
+Two rows are the same person only when **number and name both match**; the same number with a different name is kept. The server decides price and ID from the mobile number; the browser cannot waive the ID.
+
+Env: `VANABHOJANAM_API_URL` (its deployed base URL) and `VANABHOJANAM_API_KEY` (must equal Vanabhojanam's `INTEGRATION_API_KEY`).
+
+Student ID photos go to Cloudflare R2 (`R2_*` vars, same account as Vanabhojanam, prefix `yatra/student-id-cards/`) and are viewed through short-lived signed links.
 
 ## Deploy to Railway
 
@@ -46,7 +77,10 @@ Health check: `GET /health`
    - `PORT` = `3000` (Railway usually injects this; keep the default `3000`)
    - `MONGODB_URI` = `mongodb+srv://<user>:<password>@cluster0.f6wu1ck.mongodb.net/?appName=Cluster0`
    - `MONGODB_DB` = `yatra`
-   - `ADMIN_TOKEN` = a strong secret token
+   - `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET` = Cloudflare R2 (student ID photos)
+   - `VANABHOJANAM_API_URL`, `VANABHOJANAM_API_KEY` = where to read who attended Vanabhojanam
+   - `JWT_SECRET` = a random string of 32+ characters (**required in production** — the server won't start without it)
+   - `ADMIN_EMAIL`, `ADMIN_PASSWORD` = the first super admin (used once, when no admin users exist)
    - `FRONTEND_URL` = `https://<your-app>.vercel.app` (comma-separated if multiple)
    - `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET`, `RAZORPAY_WEBHOOK_SECRET`
    - `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, `CLOUDINARY_API_SECRET`

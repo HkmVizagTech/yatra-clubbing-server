@@ -1,6 +1,8 @@
 const express = require('express');
 const { getDb, isMongoConfigured } = require('../lib/mongodb');
 const { isAdminAuthorized } = require('../lib/auth');
+const { can } = require('../lib/permissions');
+const { configured: r2Configured, signedIdUrl } = require('../lib/storage');
 
 const router = express.Router();
 
@@ -28,7 +30,28 @@ router.get('/', async (req, res) => {
       _id: r._id.toString(),
       created_at: r.created_at instanceof Date ? r.created_at.toISOString() : r.created_at,
     }));
-    res.json({ count: registrations.length, registrations });
+    // ID photos live in a private Cloudflare R2 bucket: hand the admin a
+    // short-lived signed link in the same field the page already uses.
+    if (r2Configured()) {
+      await Promise.all(registrations.map(async (r) => {
+        if (r.id_card_key) {
+          try { r.id_card_url = await signedIdUrl(r.id_card_key); } catch { /* leave as is */ }
+        }
+      }));
+    }
+
+    // Rupee amounts and payment identifiers are for finance roles only.
+    const showMoney = can(req.user && req.user.role, 'dashboard:revenue');
+    if (!showMoney) {
+      for (const r of registrations) {
+        delete r.total;
+        delete r.payment_id;
+        delete r.order_id;
+        delete r.payment_signature;
+        delete r.raw;
+      }
+    }
+    res.json({ count: registrations.length, registrations, money_hidden: !showMoney });
   } catch (e) {
     res.status(502).json({ error: String(e) });
   }
