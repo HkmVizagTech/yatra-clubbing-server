@@ -48,7 +48,8 @@ const config = {
   },
   // Vanabhojanam's "who attended" API — the source for returning-attendee pricing.
   vanabhojanam: {
-    apiUrl: (process.env.VANABHOJANAM_API_URL || '').replace(/\/+$/, ''),
+    // Tolerates a missing scheme ("host.up.railway.app") and a trailing slash.
+    apiUrl: (process.env.VANABHOJANAM_API_URL || '').trim().replace(/\/+$/, '').replace(/^(?!https?:\/\/)(?=.)/i, 'https://'),
     apiKey: process.env.VANABHOJANAM_API_KEY,
   },
   cloudinary: {
