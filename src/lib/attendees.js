@@ -118,6 +118,41 @@ async function attendeeSummary(eventId) {
   };
 }
 
+/** One page of the list for the admin to read, newest first. `q` matches a name or part of a number. */
+async function listAttendees(eventId, { q = '', page = 1, limit = 50 } = {}) {
+  const db = await getDb();
+  const filter = { event_id: String(eventId) };
+  const term = String(q || '').trim();
+  if (term) {
+    const esc = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const digits = term.replace(/\D/g, '');
+    filter.$or = [{ name: { $regex: esc, $options: 'i' } }];
+    if (digits) filter.$or.push({ phone: { $regex: digits } });
+  }
+  const size = Math.min(Math.max(Number(limit) || 50, 1), 200);
+  const skip = (Math.max(Number(page) || 1, 1) - 1) * size;
+  const c = db.collection(COL);
+  const [rows, total] = await Promise.all([
+    c.find(filter).sort({ uploaded_at: -1, _id: -1 }).skip(skip).limit(size).toArray(),
+    c.countDocuments(filter),
+  ]);
+  return {
+    total,
+    page: Math.max(Number(page) || 1, 1),
+    pages: Math.max(Math.ceil(total / size), 1),
+    rows: rows.map((r) => ({ id: String(r._id), name: r.name || '', phone: r.phone, source: r.source || 'excel', at: r.uploaded_at || null })),
+  };
+}
+
+/** Remove ONE person from the list. */
+async function removeAttendee(eventId, rowId) {
+  const { ObjectId } = require('mongodb');
+  if (!ObjectId.isValid(rowId)) return 0;
+  const db = await getDb();
+  const r = await db.collection(COL).deleteOne({ _id: new ObjectId(rowId), event_id: String(eventId) });
+  return r.deletedCount || 0;
+}
+
 async function clearAttendees(eventId) {
   const db = await getDb();
   const r = await db.collection(COL).deleteMany({ event_id: String(eventId) });
@@ -144,6 +179,8 @@ module.exports = {
   nameKey,
   mergeAttendees,
   attendeeSummary,
+  listAttendees,
+  removeAttendee,
   clearAttendees,
   hasAttendeeList,
   isReturningAttendee,

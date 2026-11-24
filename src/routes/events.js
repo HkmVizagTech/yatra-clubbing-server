@@ -15,7 +15,7 @@ const {
   ensureCodeIndex,
 } = require('../lib/events');
 
-const { mergeAttendees, attendeeSummary, clearAttendees } = require('../lib/attendees');
+const { mergeAttendees, attendeeSummary, clearAttendees, listAttendees, removeAttendee } = require('../lib/attendees');
 const { fetchAttendees, configured: vbConfigured } = require('../lib/vanabhojanam');
 
 const router = express.Router();
@@ -192,6 +192,10 @@ router.get('/:id/attendees', async (req, res) => {
   try {
     const event = await getEventBySlug(req.params.id);
     if (!event) return res.status(404).json({ error: 'Not found' });
+    // ?list=1&q=&page= returns the people themselves (name + number), one page at a time
+    if (req.query.list) {
+      return res.json(await listAttendees(event._id, { q: req.query.q, page: req.query.page, limit: req.query.limit }));
+    }
     res.json(await attendeeSummary(event._id));
   } catch (e) {
     res.status(502).json({ error: String(e) });
@@ -247,6 +251,20 @@ router.post('/:id/attendees/sync', async (req, res) => {
     }
     const result = await mergeAttendees(event._id, attendees, 'vanabhojanam');
     res.json({ ...result, ...(await attendeeSummary(event._id)) });
+  } catch (e) {
+    res.status(502).json({ error: String(e) });
+  }
+});
+
+// DELETE /api/events/:id/attendees/:rowId removes one person from the list.
+router.delete('/:id/attendees/:rowId', async (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  try {
+    const event = await getEventBySlug(req.params.id);
+    if (!event) return res.status(404).json({ error: 'Not found' });
+    const removed = await removeAttendee(event._id, req.params.rowId);
+    if (!removed) return res.status(404).json({ error: 'That person is not on the list.' });
+    res.json({ removed, ...(await attendeeSummary(event._id)) });
   } catch (e) {
     res.status(502).json({ error: String(e) });
   }
