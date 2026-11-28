@@ -144,7 +144,7 @@ test('a trip WITHOUT live lookup ignores Vanabhojanam completely', async () => {
   assert.equal(r.status, 200);
   assert.equal((await coll('registrations').findOne({ ref: 'O-1' })).total, 199, 'an attendee still pays full price here');
   assert.equal(calls, before, 'Vanabhojanam was not even asked');
-  assert.deepEqual((await check('9111111111', 'OFF')).json, { checkable: false, listed: false });
+  assert.deepEqual((await check('9111111111', 'OFF')).json, { checkable: false, listed: false, registered: false });
 });
 
 test('the browser cannot fake it: claiming returning / waived changes nothing', async () => {

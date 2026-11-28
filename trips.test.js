@@ -74,7 +74,9 @@ const post = async (body) => {
   const r = await fetch(base + '/api/register', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
   return { status: r.status, json: await r.json().catch(() => ({})) };
 };
-const person = (extra) => ({ name: 'Asha Reddy', phone: '9876543210', age: 20, gender: 'female', college: 'AU College', ...extra });
+// every person gets their own mobile number: one number books a trip once
+let nextPhone = 9876543000;
+const person = (extra) => ({ name: 'Asha Reddy', phone: String(++nextPhone), age: 20, gender: 'female', college: 'AU College', ...extra });
 
 test('trip end: a trip with only a start date ends when that day ends (India time)', () => {
   const ev = { dates: { start: '2026-09-20T00:00:00' } };

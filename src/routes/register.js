@@ -3,6 +3,7 @@ const { getDb, isMongoConfigured } = require('../lib/mongodb');
 const { getEventBySlug, getNextRef } = require('../lib/events');
 const { parseDataUri } = require('../lib/cloudinary'); // just the data-URI parser; uploads go to R2 (lib/storage.js)
 const { resolvePrice } = require('../lib/pricing');
+const { findPaidRegistration, ALREADY_REGISTERED } = require('../lib/duplicates');
 const { uploadStudentId, signedIdUrl } = require('../lib/storage');
 
 const router = express.Router();
@@ -77,6 +78,22 @@ router.post('/', async (req, res) => {
 
   if (!name) return res.status(400).json({ saved: false, error: 'Full name is required.' });
   if (!/^[0-9]{10}$/.test(phone)) return res.status(400).json({ saved: false, error: 'Enter a valid 10-digit mobile number.' });
+
+  // One number, one booking. A new attempt is turned away; but if a payment has ALREADY
+  // gone through (two tabs racing), the booking is saved and flagged for the admin, because
+  // the money is taken and has to be accounted for (refund).
+  let duplicateOf = null;
+  if (event) {
+    try {
+      const dup = await findPaidRegistration(event.code, phone, b.ref);
+      if (dup) {
+        if (!(b.payment && b.payment.paymentId)) {
+          return res.status(409).json({ saved: false, already_registered: true, error: ALREADY_REGISTERED });
+        }
+        duplicateOf = dup.ref;
+      }
+    } catch (e) { /* a failed check must not block a genuine booking */ }
+  }
   if (!Number.isFinite(age) || age < 10 || age > 100) return res.status(400).json({ saved: false, error: 'Enter a valid age.' });
   if (!GENDERS.includes(gender)) return res.status(400).json({ saved: false, error: 'Please select your gender.' });
   if (passType === 'student' && !college) {
@@ -138,6 +155,7 @@ router.post('/', async (req, res) => {
     returning_attendee: returning,
     student_status: passType === 'student' ? (waiveId ? 'verified' : (b.studentStatus || 'Pending ID verification')) : null,
     id_waived: waiveId,
+    duplicate_of: duplicateOf,
     payment_id: payment.paymentId || null,
     order_id: payment.orderId || null,
     payment_signature: payment.signature || null,

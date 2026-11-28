@@ -3,6 +3,7 @@ const config = require('../config');
 const { getDb, isMongoConfigured } = require('../lib/mongodb');
 const { getEventBySlug } = require('../lib/events');
 const { resolvePrice } = require('../lib/pricing');
+const { findPaidRegistration, ALREADY_REGISTERED } = require('../lib/duplicates');
 
 const router = express.Router();
 
@@ -25,6 +26,12 @@ router.post('/', async (req, res) => {
     if (event.status !== 'active') {
       return res.status(409).json({ error: event.ended ? 'This trip has ended, so registrations are closed.' : 'Registrations for this trip are closed.', closed: true });
     }
+    // One number, one booking: stop BEFORE a payment is started.
+    try {
+      if (body.phone && (await findPaidRegistration(event.code, body.phone, body.ref || body.receipt))) {
+        return res.status(409).json({ error: ALREADY_REGISTERED, already_registered: true });
+      }
+    } catch (e) { /* if the check itself fails, do not block a genuine booking */ }
     // The amount charged is the tier's price from the event (set in admin), not
     // whatever number the browser sent.
     if (body.tier_key) {

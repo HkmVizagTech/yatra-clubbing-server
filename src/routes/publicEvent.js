@@ -2,6 +2,7 @@ const express = require('express');
 const { getActiveEvent, getActiveEvents, getEventBySlug } = require('../lib/events');
 const { hasAttendeeList, isReturningAttendee } = require('../lib/attendees');
 const { lookupPerson } = require('../lib/vanabhojanam');
+const { findPaidRegistration } = require('../lib/duplicates');
 
 const router = express.Router();
 
@@ -199,7 +200,10 @@ router.post('/check-attendee', async (req, res) => {
     if (!event) return res.status(404).json({ error: 'Event not found' });
     const live = !!(event.returning && event.returning.liveLookup === true);
     const hasList = await hasAttendeeList(String(event._id));
-    if (!hasList && !live) return res.json({ checkable: false, listed: false });
+    // Is this number already booked on this trip? (a yes/no for ONE number, rate limited like the rest)
+    let registered = false;
+    try { registered = !!(await findPaidRegistration(event.code, body.phone)); } catch (e) { /* unknown: do not block */ }
+    if (!hasList && !live) return res.json({ checkable: false, listed: false, registered });
 
     let listed = hasList ? await isReturningAttendee(String(event._id), body.phone) : false;
     let known = false;
@@ -214,7 +218,7 @@ router.post('/check-attendee', async (req, res) => {
         if (found.found && !prefillLimited(req.ip || 'x')) prefill = cleanPrefill(found.person);
       }
     }
-    res.json({ checkable: true, listed, known, attended, prefill });
+    res.json({ checkable: true, listed, known, attended, prefill, registered });
   } catch (e) {
     res.status(502).json({ error: 'Could not check right now.' });
   }
