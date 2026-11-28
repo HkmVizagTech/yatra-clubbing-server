@@ -455,6 +455,9 @@ function normalizeReturning(v) {
     label: String(r.label || '').trim().slice(0, 40),
     // pull new attendees from Vanabhojanam every hour (see lib/autoSync.js)
     autoSync: r.autoSync === true,
+    // look each person up in Vanabhojanam while they register: fill in their details,
+    // and give the special price + no ID to those who attended (see lib/pricing.js)
+    liveLookup: r.liveLookup === true,
   };
 }
 

@@ -1,6 +1,7 @@
 const express = require('express');
 const { getActiveEvent, getActiveEvents, getEventBySlug } = require('../lib/events');
 const { hasAttendeeList, isReturningAttendee } = require('../lib/attendees');
+const { lookupPerson } = require('../lib/vanabhojanam');
 
 const router = express.Router();
 
@@ -61,6 +62,7 @@ function publicEvent(e, opts = {}) {
 // hiccup just means "no special pricing is advertised".
 async function listEnabled(event) {
   try {
+    if (event.returning && event.returning.liveLookup === true) return true;
     return await hasAttendeeList(String(event._id));
   } catch (e) {
     return false;
@@ -138,9 +140,14 @@ router.get('/event', async (req, res) => {
   }
 });
 
-// POST /api/public/check-attendee { event_code, phone } -> { checkable, listed }
+// POST /api/public/check-attendee { event_code, phone }
+//   -> { checkable, listed, known?, attended?, prefill? }
 // Only a yes/no for ONE number is ever returned, and calls are rate limited, so
 // the uploaded list can't be read out through here.
+//
+// With live lookup on, a person Vanabhojanam already knows also gets `prefill`:
+// the few details the form asks for. That is personal data, so it is handed out
+// far more sparingly than the yes/no (see prefillLimited).
 const hits = new Map();
 function rateLimited(ip) {
   const now = Date.now();
@@ -150,14 +157,64 @@ function rateLimited(ip) {
   hits.set(ip, rec);
   return rec.n > 40;
 }
+const fills = new Map();
+function prefillLimited(ip) {
+  const now = Date.now();
+  const rec = fills.get(ip) || { n: 0, t: now };
+  if (now - rec.t > 60 * 60 * 1000) { rec.n = 0; rec.t = now; }
+  rec.n += 1;
+  fills.set(ip, rec);
+  return rec.n > 10; // ten people per hour from one connection
+}
+
+const YEARS = ['1st Year', '2nd Year', '3rd Year', '4th Year', '5th Year', 'Post Graduate'];
+function cleanYear(v) {
+  const t = String(v || '').trim();
+  if (YEARS.includes(t)) return t;
+  if (/post|pg|master|m\.?tech|mba|m\.?sc|mca/i.test(t)) return 'Post Graduate';
+  const n = /([1-5])/.exec(t);
+  return n ? YEARS[Number(n[1]) - 1] : '';
+}
+// Only what the form can hold, trimmed and normalised. Never email, birth date or ID.
+function cleanPrefill(p) {
+  if (!p || typeof p !== 'object') return null;
+  const gender = String(p.gender || '').toLowerCase();
+  const age = Number(p.age);
+  const out = {
+    name: String(p.name || '').trim().slice(0, 80),
+    gender: gender === 'male' || gender === 'female' ? gender : '',
+    age: Number.isFinite(age) && age >= 10 && age <= 80 ? String(Math.round(age)) : '',
+    college: String(p.college || '').trim().slice(0, 120),
+    course: String(p.course || '').trim().slice(0, 80),
+    year: cleanYear(p.year),
+  };
+  return Object.values(out).some(Boolean) ? out : null;
+}
+
 router.post('/check-attendee', async (req, res) => {
   if (rateLimited(req.ip || 'x')) return res.status(429).json({ error: 'Too many checks. Try again in a few minutes.' });
   try {
     const body = req.body || {};
     const event = await getEventBySlug(String(body.event_code || '').trim());
     if (!event) return res.status(404).json({ error: 'Event not found' });
-    if (!(await hasAttendeeList(String(event._id)))) return res.json({ checkable: false, listed: false });
-    res.json({ checkable: true, listed: await isReturningAttendee(String(event._id), body.phone) });
+    const live = !!(event.returning && event.returning.liveLookup === true);
+    const hasList = await hasAttendeeList(String(event._id));
+    if (!hasList && !live) return res.json({ checkable: false, listed: false });
+
+    let listed = hasList ? await isReturningAttendee(String(event._id), body.phone) : false;
+    let known = false;
+    let attended = false;
+    let prefill = null;
+    if (live) {
+      const found = await lookupPerson(body.phone);
+      if (found) {
+        known = found.found;
+        attended = found.attended;
+        if (found.attended) listed = true;
+        if (found.found && !prefillLimited(req.ip || 'x')) prefill = cleanPrefill(found.person);
+      }
+    }
+    res.json({ checkable: true, listed, known, attended, prefill });
   } catch (e) {
     res.status(502).json({ error: 'Could not check right now.' });
   }
